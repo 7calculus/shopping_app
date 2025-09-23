@@ -5,7 +5,7 @@ a = Analysis(
     ['shopping_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('credentials.json', '.'), ('shopping_icon.png', '.'), ('light_mode.png', '.'), ('dark_mode.png', '.')],
+    datas=[('credentials.json', '.'), ('firebase_key.json', '.'), ('shopping_icon.png', '.'), ('light_mode.png', '.'), ('dark_mode.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

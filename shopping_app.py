@@ -1,25 +1,32 @@
 """
 shopping_app.py
-Requires: credentials.json (OAuth 2.0 Client ID - Desktop)
-Python packages: google-auth, google-auth-oauthlib, google-api-python-client, pillow
+Requires: credentials.json (OAuth 2.0 Client ID - Desktop), firebase_key.json
+Python packages: google-auth, google-auth-oauthlib, google-api-python-client, pillow, firebase-admin
 """
 
 import os
 import io
 import sys
-import base64
+import threading
 import tkinter as tk
 from tkinter import messagebox, PhotoImage
 from PIL import Image, ImageDraw, ImageFont
-import threading
+import base64
+
 
 # Google OAuth/Gmail
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email import encoders
+
+# Firebase
+import firebase_admin
+from firebase_admin import credentials as fb_credentials
+from firebase_admin import db
 
 # ---- CONFIG ----
 SCOPES = [
@@ -30,6 +37,8 @@ SCOPES = [
 ]
 CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
+FIREBASE_KEY = "firebase_key.json"
+FIREBASE_DB_URL = "https://shopping-app-f5c0b-default-rtdb.asia-southeast1.firebasedatabase.app/"  # e.g., https://your-project.firebaseio.com
 
 # --------- PyInstaller resource helper ---------
 def resource_path(relative_path):
@@ -58,11 +67,76 @@ class ShoppingApp:
         self.gmail_service = None
         self.user_email = None
 
+        # Initialize Firebase
+        self.init_firebase()
+
+        # Build UI
         self.build_ui()
         self.apply_theme()
 
+        # Try auto-login
+        self.firebase_auto_login_threaded()
+
+    # ---------------- Firebase ----------------
+    def init_firebase(self):
+        try:
+            if not firebase_admin._apps:
+                cred = fb_credentials.Certificate(resource_path(FIREBASE_KEY))
+                firebase_admin.initialize_app(cred, {
+                    "databaseURL": FIREBASE_DB_URL
+                })
+            self.fb_ref = db.reference("/users/credentials")
+        except Exception as e:
+            messagebox.showerror("Firebase init failed", str(e))
+
+    def save_creds_to_firebase(self, creds):
+        try:
+            creds_dict = {
+                "token": creds.token,
+                "refresh_token": creds.refresh_token,
+                "token_uri": creds.token_uri,
+                "client_id": creds.client_id,
+                "client_secret": creds.client_secret,
+                "scopes": creds.scopes
+            }
+            self.fb_ref.set(creds_dict)
+        except Exception as e:
+            print("Failed to save creds to Firebase:", e)
+
+    def load_creds_from_firebase(self):
+        try:
+            creds_dict = self.fb_ref.get()
+            if not creds_dict:
+                return None
+            creds = Credentials.from_authorized_user_info(creds_dict, SCOPES)
+            return creds
+        except Exception as e:
+            print("Failed to load creds from Firebase:", e)
+            return None
+
+    def firebase_auto_login_threaded(self):
+        t = threading.Thread(target=self.firebase_auto_login)
+        t.daemon = True
+        t.start()
+
+    def firebase_auto_login(self):
+        creds = self.load_creds_from_firebase()
+        if creds:
+            try:
+                self.creds = creds
+                self.gmail_service = build("gmail", "v1", credentials=self.creds)
+                oauth2_service = build('oauth2', 'v2', credentials=self.creds)
+                userinfo = oauth2_service.userinfo().get().execute()
+                self.user_email = userinfo.get("email")
+                self.email_lbl.config(text=self.user_email)
+                messagebox.showinfo("Auto-login", f"Signed in as {self.user_email}")
+            except Exception as e:
+                print("Auto-login failed:", e)
+
     # ---------------- Build UI ----------------
     def build_ui(self):
+        
+
         root = self.root
 
         # Top bar
@@ -82,6 +156,15 @@ class ShoppingApp:
                                    activebackground=self.theme["bg"], command=self.toggle_theme)
         self.theme_btn.image = self.light_icon
         self.theme_btn.pack(side="right", padx=(8,0))
+       
+
+        # Log Out button below Sign In
+        logout_btn = tk.Button(topbar, text="Log Out", command=self.log_out,
+                            bg="#9e9e9e", fg="white", font=("Segoe UI", 10, "bold"), bd=0,
+                            padx=10, pady=4, activebackground="#757575")
+        logout_btn.pack(side="right", padx=(0,8), pady=(0,0))  # pushes it below
+
+
 
         # Sign-in button and email label
         self.email_lbl = tk.Label(topbar, text="Not signed in", anchor="e",
@@ -129,11 +212,26 @@ class ShoppingApp:
         self.add_card()
 
     # ---------------- Theme ----------------
+    def log_out(self):
+        # Clear credentials
+        self.creds = None
+        self.gmail_service = None
+        self.user_email = None
+
+        # Remove from Firebase
+        try:
+            self.fb_ref.delete()
+        except Exception as e:
+            print("Failed to delete Firebase credentials:", e)
+
+        # Update UI
+        self.email_lbl.config(text="Not signed in")
+        messagebox.showinfo("Logged out", "You have been logged out successfully.")
+
     def apply_theme(self):
         t = self.theme
         self.root.configure(bg=t["bg"])
 
-        # Update top-level widgets
         for widget in self.root.winfo_children():
             try:
                 if isinstance(widget, tk.Frame):
@@ -146,7 +244,6 @@ class ShoppingApp:
             except Exception:
                 pass
 
-        # Scrollable canvas and cards
         self.canvas.configure(bg=t["bg"])
         for card in self.cards_frame.winfo_children():
             card.configure(bg=t["card"])
@@ -159,7 +256,6 @@ class ShoppingApp:
     def toggle_theme(self):
         self.theme = self.dark if self.theme == self.light else self.light
         self.apply_theme()
-        # Update theme icon
         icon_img = self.dark_icon if self.theme == self.dark else self.light_icon
         self.theme_btn.config(image=icon_img)
         self.theme_btn.image = icon_img
@@ -202,14 +298,15 @@ class ShoppingApp:
             flow = InstalledAppFlow.from_client_secrets_file(resource_path(CREDENTIALS_FILE), SCOPES)
             creds = flow.run_local_server(port=0)
             self.creds = creds
-            self.gmail_service = build("gmail", "v1", credentials=creds)
-            oauth2_service = build('oauth2', 'v2', credentials=creds)
+            self.gmail_service = build("gmail", "v1", credentials=self.creds)
+            oauth2_service = build('oauth2', 'v2', credentials=self.creds)
             userinfo = oauth2_service.userinfo().get().execute()
-            email = userinfo.get("email")
-            name = userinfo.get("name")
-            self.user_email = email
-            self.email_lbl.config(text=email)
-            messagebox.showinfo("Signed in", f"Signed in as {name} ({email})")
+            self.user_email = userinfo.get("email")
+            self.email_lbl.config(text=self.user_email)
+            messagebox.showinfo("Signed in", f"Signed in as {self.user_email}")
+
+            # Save credentials to Firebase
+            self.save_creds_to_firebase(self.creds)
         except FileNotFoundError:
             messagebox.showerror("Missing credentials.json", f"Put your OAuth client credentials file named '{CREDENTIALS_FILE}' in the app folder.")
         except Exception as e:
@@ -227,7 +324,6 @@ class ShoppingApp:
         except:
             font = ImageFont.load_default()
 
-        # Compute line height
         bbox = font.getbbox("Ay")
         line_height = (bbox[3] - bbox[1]) + 10
 
@@ -239,13 +335,11 @@ class ShoppingApp:
         img = Image.new("RGB", (width, height), color=bg_color)
         draw = ImageDraw.Draw(img)
 
-        # Draw title
         title = "Shopping List"
         bbox_title = draw.textbbox((0, 0), title, font=font)
         title_width = bbox_title[2] - bbox_title[0]
         draw.text(((width - title_width)//2, padding), title, fill=fg_color, font=font)
 
-        # Draw items
         y = padding + line_height + 10
         for item in items:
             draw.text((padding, y), f"- {item}", fill=fg_color, font=font)
@@ -296,7 +390,6 @@ class ShoppingApp:
         t = threading.Thread(target=self.send_email)
         t.daemon = True
         t.start()
-
 
 if __name__ == "__main__":
     root = tk.Tk()
