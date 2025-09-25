@@ -5,7 +5,7 @@ a = Analysis(
     ['shopping_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('credentials.json', '.'), ('firebase_key.json', '.'), ('shopping_icon.png', '.'), ('light_mode.png', '.'), ('dark_mode.png', '.')],
+    datas=[('shopping_icon.png', '.'), ('light_mode.png', '.'), ('dark_mode.png', '.'), ('credentials.json', '.'), ('firebase_key.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['shopping_icon_ico.ico'],
 )

@@ -13,7 +13,6 @@ from tkinter import messagebox, PhotoImage
 from PIL import Image, ImageDraw, ImageFont
 import base64
 
-
 # Google OAuth/Gmail
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -36,13 +35,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.send"
 ]
 CREDENTIALS_FILE = "credentials.json"
-TOKEN_FILE = "token.json"
 FIREBASE_KEY = "firebase_key.json"
-FIREBASE_DB_URL = "https://shopping-app-f5c0b-default-rtdb.asia-southeast1.firebasedatabase.app/"  # e.g., https://your-project.firebaseio.com
+FIREBASE_DB_URL = "https://shopping-app-f5c0b-default-rtdb.asia-southeast1.firebasedatabase.app/"
 
 # --------- PyInstaller resource helper ---------
 def resource_path(relative_path):
-    """Get absolute path to resource, works for dev and PyInstaller"""
     try:
         base_path = sys._MEIPASS
     except AttributeError:
@@ -57,12 +54,12 @@ class ShoppingApp:
         root.geometry("700x600")
         root.minsize(520, 420)
 
-        # theme dicts
+        # Themes
         self.light = {"bg": "#ffffff", "card": "#f5f5f5", "fg": "#000000", "btn_bg": "#e0e0e0"}
         self.dark  = {"bg": "#1e1e1e", "card": "#2b2b2b", "fg": "#f1f1f1", "btn_bg": "#333333"}
         self.theme = self.light
 
-        # Google credentials & services
+        # Google credentials
         self.creds = None
         self.gmail_service = None
         self.user_email = None
@@ -82,9 +79,7 @@ class ShoppingApp:
         try:
             if not firebase_admin._apps:
                 cred = fb_credentials.Certificate(resource_path(FIREBASE_KEY))
-                firebase_admin.initialize_app(cred, {
-                    "databaseURL": FIREBASE_DB_URL
-                })
+                firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_DB_URL})
             self.fb_ref = db.reference("/users/credentials")
         except Exception as e:
             messagebox.showerror("Firebase init failed", str(e))
@@ -92,11 +87,10 @@ class ShoppingApp:
     def save_creds_to_firebase(self, creds):
         try:
             creds_dict = {
-                "token": creds.token,
                 "refresh_token": creds.refresh_token,
-                "token_uri": creds.token_uri,
                 "client_id": creds.client_id,
                 "client_secret": creds.client_secret,
+                "token_uri": creds.token_uri,
                 "scopes": creds.scopes
             }
             self.fb_ref.set(creds_dict)
@@ -108,7 +102,14 @@ class ShoppingApp:
             creds_dict = self.fb_ref.get()
             if not creds_dict:
                 return None
-            creds = Credentials.from_authorized_user_info(creds_dict, SCOPES)
+            creds = Credentials(
+                None,
+                refresh_token=creds_dict.get("refresh_token"),
+                client_id=creds_dict.get("client_id"),
+                client_secret=creds_dict.get("client_secret"),
+                token_uri=creds_dict.get("token_uri"),
+                scopes=creds_dict.get("scopes")
+            )
             return creds
         except Exception as e:
             print("Failed to load creds from Firebase:", e)
@@ -133,13 +134,18 @@ class ShoppingApp:
             except Exception as e:
                 print("Auto-login failed:", e)
 
+    def logout(self):
+        self.creds = None
+        self.gmail_service = None
+        self.user_email = None
+        self.email_lbl.config(text="Not signed in")
+        self.fb_ref.delete()
+        messagebox.showinfo("Logged out", "You have been logged out.")
+
     # ---------------- Build UI ----------------
     def build_ui(self):
-        
-
         root = self.root
 
-        # Top bar
         topbar = tk.Frame(root, height=60, bg=self.theme["bg"])
         topbar.pack(fill="x", side="top", padx=8, pady=6)
 
@@ -147,35 +153,28 @@ class ShoppingApp:
                          bg=self.theme["bg"], fg=self.theme["fg"])
         title.pack(side="left")
 
-        # Load theme icons
         self.light_icon = PhotoImage(file=resource_path("light_mode.png"))
         self.dark_icon  = PhotoImage(file=resource_path("dark_mode.png"))
 
-        # Theme toggle button
         self.theme_btn = tk.Button(topbar, image=self.light_icon, bd=0, bg=self.theme["bg"],
                                    activebackground=self.theme["bg"], command=self.toggle_theme)
         self.theme_btn.image = self.light_icon
         self.theme_btn.pack(side="right", padx=(8,0))
-       
 
-        # Log Out button below Sign In
-        logout_btn = tk.Button(topbar, text="Log Out", command=self.log_out,
-                            bg="#9e9e9e", fg="white", font=("Segoe UI", 10, "bold"), bd=0,
-                            padx=10, pady=4, activebackground="#757575")
-        logout_btn.pack(side="right", padx=(0,8), pady=(0,0))  # pushes it below
-
-
-
-        # Sign-in button and email label
         self.email_lbl = tk.Label(topbar, text="Not signed in", anchor="e",
                                   bg=self.theme["bg"], fg=self.theme["fg"])
         self.email_lbl.pack(side="right", padx=(0,8))
+
         signin_btn = tk.Button(topbar, text="Sign in with Google", command=self.sign_in_threaded,
                                bg="#ff9800", fg="white", font=("Segoe UI", 10, "bold"), bd=0,
                                padx=10, pady=4, activebackground="#fb8c00")
         signin_btn.pack(side="right", padx=(0,8))
 
-        # Center frame with scrollable cards
+        logout_btn = tk.Button(topbar, text="Log out", command=self.logout,
+                               bg="#9E9E9E", fg="white", font=("Segoe UI", 10, "bold"), bd=0,
+                               padx=10, pady=4, activebackground="#757575")
+        logout_btn.pack(side="right", padx=(0,8))
+
         body = tk.Frame(root, bg=self.theme["bg"])
         body.pack(fill="both", expand=True, padx=12, pady=(0,12))
 
@@ -183,17 +182,13 @@ class ShoppingApp:
         vsb = tk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
         self.cards_frame = tk.Frame(self.canvas, bg=self.theme["bg"])
 
-        self.cards_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
+        self.cards_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0,0), window=self.cards_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=vsb.set)
 
         self.canvas.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
 
-        # Bottom controls
         bottom = tk.Frame(root, height=56, bg=self.theme["bg"])
         bottom.pack(side="bottom", fill="x", padx=12, pady=(0,12))
 
@@ -207,31 +202,13 @@ class ShoppingApp:
                              bd=0, padx=12, pady=6, activebackground="#1976D2")
         send_btn.pack(side="right", padx=8)
 
-        # Track card entry widgets
         self.card_entries = []
         self.add_card()
 
     # ---------------- Theme ----------------
-    def log_out(self):
-        # Clear credentials
-        self.creds = None
-        self.gmail_service = None
-        self.user_email = None
-
-        # Remove from Firebase
-        try:
-            self.fb_ref.delete()
-        except Exception as e:
-            print("Failed to delete Firebase credentials:", e)
-
-        # Update UI
-        self.email_lbl.config(text="Not signed in")
-        messagebox.showinfo("Logged out", "You have been logged out successfully.")
-
     def apply_theme(self):
         t = self.theme
         self.root.configure(bg=t["bg"])
-
         for widget in self.root.winfo_children():
             try:
                 if isinstance(widget, tk.Frame):
@@ -243,7 +220,6 @@ class ShoppingApp:
                         widget.configure(bg=t["btn_bg"], fg=t["fg"], activebackground=t["btn_bg"])
             except Exception:
                 pass
-
         self.canvas.configure(bg=t["bg"])
         for card in self.cards_frame.winfo_children():
             card.configure(bg=t["card"])
@@ -312,59 +288,48 @@ class ShoppingApp:
         except Exception as e:
             messagebox.showerror("Sign in failed", str(e))
 
-    # ---------------- Generate in-memory shopping list image ----------------
+    # ---------------- Screenshot ----------------
     def take_screenshot(self):
         items = [e.get().strip() for e in self.card_entries if e.get().strip()]
         if not items:
             items = ["Your shopping list is empty."]
-
         padding = 20
         try:
             font = ImageFont.truetype("arial.ttf", 20)
         except:
             font = ImageFont.load_default()
-
         bbox = font.getbbox("Ay")
-        line_height = (bbox[3] - bbox[1]) + 10
-
+        line_height = (bbox[3]-bbox[1]) + 10
         width = 600
-        height = padding * 2 + line_height * len(items) + 40
-
-        bg_color = (255, 255, 255) if self.theme == self.light else (30, 30, 30)
-        fg_color = (0, 0, 0) if self.theme == self.light else (241, 241, 241)
-        img = Image.new("RGB", (width, height), color=bg_color)
+        height = padding*2 + line_height*len(items) + 40
+        bg_color = (255,255,255) if self.theme==self.light else (30,30,30)
+        fg_color = (0,0,0) if self.theme==self.light else (241,241,241)
+        img = Image.new("RGB", (width,height), color=bg_color)
         draw = ImageDraw.Draw(img)
-
         title = "Shopping List"
-        bbox_title = draw.textbbox((0, 0), title, font=font)
-        title_width = bbox_title[2] - bbox_title[0]
-        draw.text(((width - title_width)//2, padding), title, fill=fg_color, font=font)
-
-        y = padding + line_height + 10
+        bbox_title = draw.textbbox((0,0), title, font=font)
+        draw.text(((width-(bbox_title[2]-bbox_title[0])//2), padding), title, fill=fg_color, font=font)
+        y = padding+line_height+10
         for item in items:
-            draw.text((padding, y), f"- {item}", fill=fg_color, font=font)
+            draw.text((padding,y), f"- {item}", fill=fg_color, font=font)
             y += line_height
-
         img_bytes = io.BytesIO()
         img.save(img_bytes, format="PNG")
         img_bytes.seek(0)
         return img_bytes
 
-    # ---------------- Send email via Gmail API ----------------
+    # ---------------- Send Email ----------------
     def create_message_with_attachment(self, sender, to, subject, message_text, img_bytes, filename="shopping_list.png"):
         message = MIMEMultipart()
         message["to"] = to
         message["from"] = sender
         message["subject"] = subject
-
         message.attach(MIMEText(message_text))
-
         part = MIMEBase("application", "octet-stream")
         part.set_payload(img_bytes.read())
         encoders.encode_base64(part)
         part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
         message.attach(part)
-
         raw_bytes = base64.urlsafe_b64encode(message.as_bytes())
         raw_str = raw_bytes.decode()
         return {"raw": raw_str}
@@ -373,11 +338,9 @@ class ShoppingApp:
         if not self.creds or not self.gmail_service or not self.user_email:
             messagebox.showwarning("Not signed in", "Please sign in with Google before sending.")
             return
-
         screenshot_bytes = self.take_screenshot()
         items = [e.get().strip() for e in self.card_entries if e.get().strip()]
         body_text = "Your shopping list:\n\n" + "\n".join(f"- {i}" for i in items) if items else "Your shopping list is empty."
-
         try:
             raw_msg = self.create_message_with_attachment(self.user_email, self.user_email,
                                                           "Your Shopping List", body_text, screenshot_bytes)
